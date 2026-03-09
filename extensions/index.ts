@@ -173,59 +173,59 @@ function extractAssistantText(message: any): string {
 		.trim();
 }
 
-export function extractFinalTurnToolResults(messages: any[]): any[] {
-	let lastAssistantIndex = -1;
-	for (let index = messages.length - 1; index >= 0; index -= 1) {
-		if (messages[index]?.role === "assistant") {
-			lastAssistantIndex = index;
-			break;
-		}
-	}
-	if (lastAssistantIndex <= 0) return [];
-
-	const toolResults: any[] = [];
-	for (let index = lastAssistantIndex - 1; index >= 0; index -= 1) {
-		const message = messages[index];
-		if (message?.role === "toolResult") {
-			toolResults.unshift(message);
-			continue;
-		}
-		break;
-	}
-	return toolResults;
-}
-
 function assistantSignalsFailure(text: string): boolean {
 	return /\b(i (couldn't|could not|can't|cannot|wasn't able to)|unable to|failed to|couldn't complete|could not complete|did not complete)\b/i.test(text);
 }
 
-function inferCategory(text: string, toolResults: any[]): NotificationCategory {
-	const hasToolError = toolResults.some((message) => message?.role === "toolResult" && message.isError === true);
-	const hasToolSuccess = toolResults.some((message) => message?.role === "toolResult" && message.isError !== true);
-	const lastToolResult = toolResults.at(-1);
+interface TurnAnalysis {
+	assistantText: string;
+	firstLine: string;
+	failedToolName?: string;
+	hasToolError: boolean;
+	hasToolSuccess: boolean;
+	hasSuccessfulChange: boolean;
+	explicitFailure: boolean;
+}
+
+function analyzeTurn(message: any, toolResults: any[]): TurnAnalysis {
+	const assistantText = extractAssistantText(message);
+	const firstLine = pickFirstMeaningfulLine(assistantText) || assistantText.trim();
+	const failedTool = toolResults.find((result) => result?.role === "toolResult" && result.isError === true);
+	const hasToolError = Boolean(failedTool);
+	const hasToolSuccess = toolResults.some((result) => result?.role === "toolResult" && result.isError !== true);
 	const hasSuccessfulChange = toolResults.some(
-		(message) => message?.role === "toolResult" && message.isError !== true && (message.toolName === "edit" || message.toolName === "write"),
+		(result) => result?.role === "toolResult" && result.isError !== true && (result.toolName === "edit" || result.toolName === "write"),
 	);
 
-	if (assistantSignalsFailure(text)) return "error";
-	if (hasToolError && (!hasToolSuccess || lastToolResult?.isError === true)) return "error";
-	if (/\?\s*$/.test(text) || /(would you like|do you want|should i|want me to|how would you like)/i.test(text)) return "question";
+	return {
+		assistantText,
+		firstLine,
+		failedToolName: failedTool?.toolName,
+		hasToolError,
+		hasToolSuccess,
+		hasSuccessfulChange,
+		explicitFailure: assistantSignalsFailure(assistantText),
+	};
+}
 
-	const firstLine = pickFirstMeaningfulLine(text) || text.trim();
-	if (/^(warning|caveat|be aware)\b/i.test(firstLine)) return "warning";
-	if (/\b(partial|couldn't|could not|unable to)\b/i.test(firstLine)) return "warning";
-
-	if (hasSuccessfulChange) return "changes";
-	if (hasToolError) return "warning";
-	if (/(done|completed|implemented|updated|created|fixed|added|wrote|reviewed)/i.test(text)) return "success";
+function inferCategory(analysis: TurnAnalysis, toolResults: any[]): NotificationCategory {
+	if (analysis.explicitFailure) return "error";
+	if (analysis.hasToolError && (!analysis.hasToolSuccess || toolResults.at(-1)?.isError === true)) return "error";
+	if (/\?\s*$/.test(analysis.assistantText) || /(would you like|do you want|should i|want me to|how would you like)/i.test(analysis.assistantText)) {
+		return "question";
+	}
+	if (/^(warning|caveat|be aware)\b/i.test(analysis.firstLine)) return "warning";
+	if (/\b(partial|couldn't|could not|unable to)\b/i.test(analysis.firstLine)) return "warning";
+	if (analysis.hasSuccessfulChange) return "changes";
+	if (analysis.hasToolError) return "warning";
+	if (/(done|completed|implemented|updated|created|fixed|added|wrote|reviewed)/i.test(analysis.assistantText)) return "success";
 	return "info";
 }
 
-function fallbackSummary(category: NotificationCategory, toolResults: any[], assistantText: string): string {
+function fallbackSummary(category: NotificationCategory, analysis: TurnAnalysis): string {
 	if (category === "error") {
-		const failed = toolResults.find((message) => message?.role === "toolResult" && message.isError === true);
-		if (failed?.toolName) return `${failed.toolName} failed`;
-		if (assistantSignalsFailure(assistantText)) return "Pi couldn't complete the request";
+		if (analysis.failedToolName) return `${analysis.failedToolName} failed`;
+		if (analysis.explicitFailure) return "Pi couldn't complete the request";
 		return "A tool call failed";
 	}
 	if (category === "changes") return "Pi made changes and is ready for input";
@@ -236,18 +236,12 @@ function fallbackSummary(category: NotificationCategory, toolResults: any[], ass
 }
 
 export function summarizeAssistantTurn(message: any, toolResults: any[], includeSummary: boolean): { category: NotificationCategory; body: string } {
-	const assistantText = extractAssistantText(message);
-	const category = inferCategory(assistantText, toolResults);
-	if (!includeSummary) return { category, body: fallbackSummary(category, toolResults, assistantText) };
-	const summarySource = firstSentence(pickFirstMeaningfulLine(assistantText) || assistantText);
-	const body = truncate(summarySource || fallbackSummary(category, toolResults, assistantText), 160);
+	const analysis = analyzeTurn(message, toolResults);
+	const category = inferCategory(analysis, toolResults);
+	if (!includeSummary) return { category, body: fallbackSummary(category, analysis) };
+	const summarySource = firstSentence(analysis.firstLine || analysis.assistantText);
+	const body = truncate(summarySource || fallbackSummary(category, analysis), 160);
 	return { category, body };
-}
-
-export function summarizeTurn(messages: any[], includeSummary: boolean): { category: NotificationCategory; body: string } {
-	const lastAssistant = [...messages].reverse().find((message) => message?.role === "assistant");
-	const toolResults = extractFinalTurnToolResults(messages);
-	return summarizeAssistantTurn(lastAssistant, toolResults, includeSummary);
 }
 
 function renderCategoryTitle(category: NotificationCategory): string {
@@ -323,10 +317,9 @@ export default function ghosttyNotifierExtension(pi: ExtensionAPI) {
 		ctx.ui.notify(message, level);
 	}
 
-	pi.on("session_start", async (_event, ctx) => reconstructState(ctx));
-	pi.on("session_switch", async (_event, ctx) => reconstructState(ctx));
-	pi.on("session_fork", async (_event, ctx) => reconstructState(ctx));
-	pi.on("session_tree", async (_event, ctx) => reconstructState(ctx));
+	for (const eventName of ["session_start", "session_switch", "session_fork", "session_tree"] as const) {
+		pi.on(eventName, async (_event, ctx) => reconstructState(ctx));
+	}
 
 	pi.on("turn_end", async (event, ctx) => {
 		if (!ctx.hasUI) return;

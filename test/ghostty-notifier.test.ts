@@ -1,56 +1,50 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import ghosttyNotifierExtension, { extractFinalTurnToolResults, mergeConfig, summarizeAssistantTurn, summarizeTurn, windowsToastScript } from "../extensions/index.ts";
+import ghosttyNotifierExtension, { mergeConfig, summarizeAssistantTurn, windowsToastScript } from "../extensions/index.ts";
 
-test("extractFinalTurnToolResults only returns tool results for the final assistant message", () => {
-	const messages = [
-		{ role: "assistant", content: [{ type: "text", text: "Trying first approach" }] },
-		{ role: "toolResult", toolName: "read", isError: true },
-		{ role: "assistant", content: [{ type: "text", text: "Applying the fix" }] },
-		{ role: "toolResult", toolName: "write", isError: false },
-		{ role: "toolResult", toolName: "edit", isError: false },
-		{ role: "assistant", content: [{ type: "text", text: "Done." }] },
-	];
-
-	assert.deepEqual(extractFinalTurnToolResults(messages), [
-		{ role: "toolResult", toolName: "write", isError: false },
-		{ role: "toolResult", toolName: "edit", isError: false },
-	]);
-});
-
-test("summarizeTurn ignores recoverable tool failures earlier in the same turn", () => {
-	const messages = [
+test("summarizeAssistantTurn ignores recoverable tool failures earlier in the same turn", () => {
+	const assistantMessage = { role: "assistant", content: [{ type: "text", text: "Fixed the install flow." }] };
+	const toolResults = [
 		{ role: "toolResult", toolName: "read", isError: true },
 		{ role: "toolResult", toolName: "write", isError: false },
-		{ role: "assistant", content: [{ type: "text", text: "Fixed the install flow." }] },
 	];
 
-	assert.deepEqual(summarizeTurn(messages, true), {
+	assert.deepEqual(summarizeAssistantTurn(assistantMessage, toolResults, true), {
 		category: "changes",
 		body: "Fixed the install flow.",
 	});
 });
 
-test("summarizeTurn reports an error when the last tool result failed", () => {
-	const messages = [
+test("summarizeAssistantTurn reports an error when the last tool result failed", () => {
+	const assistantMessage = { role: "assistant", content: [{ type: "text", text: "I couldn't complete that change." }] };
+	const toolResults = [
 		{ role: "toolResult", toolName: "read", isError: false },
 		{ role: "toolResult", toolName: "edit", isError: true },
-		{ role: "assistant", content: [{ type: "text", text: "I couldn't complete that change." }] },
 	];
 
-	assert.deepEqual(summarizeTurn(messages, false), {
+	assert.deepEqual(summarizeAssistantTurn(assistantMessage, toolResults, false), {
 		category: "error",
 		body: "edit failed",
 	});
 });
 
-test("summarizeTurn treats explicit assistant failure without tool results as an error", () => {
-	const messages = [{ role: "assistant", content: [{ type: "text", text: "I couldn't complete that change." }] }];
+test("summarizeAssistantTurn treats explicit assistant failure without tool results as an error", () => {
+	const assistantMessage = { role: "assistant", content: [{ type: "text", text: "I couldn't complete that change." }] };
 
-	assert.deepEqual(summarizeTurn(messages, false), {
+	assert.deepEqual(summarizeAssistantTurn(assistantMessage, [], false), {
 		category: "error",
 		body: "Pi couldn't complete the request",
+	});
+});
+
+test("summarizeAssistantTurn uses the current turn toolResults directly", () => {
+	const assistantMessage = { role: "assistant", content: [{ type: "text", text: "Done. Bumped the version and pushed it." }] };
+	const toolResults = [{ role: "toolResult", toolName: "bash", isError: false }];
+
+	assert.deepEqual(summarizeAssistantTurn(assistantMessage, toolResults, true), {
+		category: "success",
+		body: "Done.",
 	});
 });
 
@@ -85,16 +79,6 @@ test("windowsToastScript places the title in the first text slot and the body in
 	assert.notEqual(titleIndex, -1);
 	assert.notEqual(bodyIndex, -1);
 	assert.ok(titleIndex < bodyIndex);
-});
-
-test("summarizeAssistantTurn uses the current turn toolResults directly", () => {
-	const assistantMessage = { role: "assistant", content: [{ type: "text", text: "Done. Bumped the version and pushed it." }] };
-	const toolResults = [{ role: "toolResult", toolName: "bash", isError: false }];
-
-	assert.deepEqual(summarizeAssistantTurn(assistantMessage, toolResults, true), {
-		category: "success",
-		body: "Done.",
-	});
 });
 
 test("turn_end skips notifications in non-interactive contexts", async () => {
