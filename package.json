@@ -1,6 +1,6 @@
 {
   "name": "pi-ghostty-notifier",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Ghostty-first notifications with smart summaries for Pi",
   "author": "Javi Molina",
   "license": "MIT",
@@ -12,10 +12,25 @@
     "ghostty",
     "notifications"
   ],
+  "homepage": "https://github.com/javiermolinar/pi-ghostty-notifier#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/javiermolinar/pi-ghostty-notifier.git"
+  },
+  "bugs": {
+    "url": "https://github.com/javiermolinar/pi-ghostty-notifier/issues"
+  },
+  "bin": {
+    "pi-ghostty-notifier": "install.mjs"
+  },
   "files": [
     "extensions/",
+    "install.mjs",
     "README.md"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "pi": {
     "extensions": [
       "./extensions/index.ts"

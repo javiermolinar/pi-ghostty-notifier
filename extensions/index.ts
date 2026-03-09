@@ -195,25 +195,38 @@ export function extractFinalTurnToolResults(messages: any[]): any[] {
 	return toolResults;
 }
 
+function assistantSignalsFailure(text: string): boolean {
+	return /\b(i (couldn't|could not|can't|cannot|wasn't able to)|unable to|failed to|couldn't complete|could not complete|did not complete)\b/i.test(text);
+}
+
 function inferCategory(text: string, toolResults: any[]): NotificationCategory {
-	if (toolResults.some((message) => message?.role === "toolResult" && message.isError === true)) return "error";
+	const hasToolError = toolResults.some((message) => message?.role === "toolResult" && message.isError === true);
+	const hasToolSuccess = toolResults.some((message) => message?.role === "toolResult" && message.isError !== true);
+	const lastToolResult = toolResults.at(-1);
+	const hasSuccessfulChange = toolResults.some(
+		(message) => message?.role === "toolResult" && message.isError !== true && (message.toolName === "edit" || message.toolName === "write"),
+	);
+
+	if (assistantSignalsFailure(text)) return "error";
+	if (hasToolError && (!hasToolSuccess || lastToolResult?.isError === true)) return "error";
 	if (/\?\s*$/.test(text) || /(would you like|do you want|should i|want me to|how would you like)/i.test(text)) return "question";
 
 	const firstLine = pickFirstMeaningfulLine(text) || text.trim();
 	if (/^(warning|caveat|be aware)\b/i.test(firstLine)) return "warning";
 	if (/\b(partial|couldn't|could not|unable to)\b/i.test(firstLine)) return "warning";
 
-	if (toolResults.some((message) => message?.role === "toolResult" && (message.toolName === "edit" || message.toolName === "write"))) {
-		return "changes";
-	}
+	if (hasSuccessfulChange) return "changes";
+	if (hasToolError) return "warning";
 	if (/(done|completed|implemented|updated|created|fixed|added|wrote|reviewed)/i.test(text)) return "success";
 	return "info";
 }
 
-function fallbackSummary(category: NotificationCategory, toolResults: any[]): string {
+function fallbackSummary(category: NotificationCategory, toolResults: any[], assistantText: string): string {
 	if (category === "error") {
 		const failed = toolResults.find((message) => message?.role === "toolResult" && message.isError === true);
-		return failed?.toolName ? `${failed.toolName} failed` : "A tool call failed";
+		if (failed?.toolName) return `${failed.toolName} failed`;
+		if (assistantSignalsFailure(assistantText)) return "Pi couldn't complete the request";
+		return "A tool call failed";
 	}
 	if (category === "changes") return "Pi made changes and is ready for input";
 	if (category === "warning") return "Pi finished with caveats";
@@ -227,9 +240,9 @@ export function summarizeTurn(messages: any[], includeSummary: boolean): { categ
 	const toolResults = extractFinalTurnToolResults(messages);
 	const assistantText = extractAssistantText(lastAssistant);
 	const category = inferCategory(assistantText, toolResults);
-	if (!includeSummary) return { category, body: fallbackSummary(category, toolResults) };
+	if (!includeSummary) return { category, body: fallbackSummary(category, toolResults, assistantText) };
 	const summarySource = firstSentence(pickFirstMeaningfulLine(assistantText) || assistantText);
-	const body = truncate(summarySource || fallbackSummary(category, toolResults), 160);
+	const body = truncate(summarySource || fallbackSummary(category, toolResults, assistantText), 160);
 	return { category, body };
 }
 

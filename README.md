@@ -2,6 +2,38 @@
 
 Ghostty-first notifications for Pi with smart summaries, category-aware titles, and configurable notification levels.
 
+## Install
+
+Install with pi:
+
+```bash
+pi install npm:pi-ghostty-notifier
+```
+
+Or with npm via the package installer:
+
+```bash
+npx pi-ghostty-notifier
+```
+
+To try it for the current run only:
+
+```bash
+pi -e npm:pi-ghostty-notifier
+```
+
+If pi is already running, use:
+
+```text
+/reload
+```
+
+For local development, you can still load it directly from this repo:
+
+```bash
+pi -e .
+```
+
 ## Current behavior
 
 This extension always tries to send **terminal-side notifications** first, and then also sends **native system notifications** where currently implemented.
@@ -48,20 +80,6 @@ So on Linux the current behavior is:
 - Smart categories and short summaries for completed Pi turns
 - Notification levels: `low`, `medium`, `all`
 - Emoji titles for quick visual scanning
-
-## Install
-
-Project-local extension:
-
-```bash
-pi -e ./.pi/extensions/ghostty-notifier.ts
-```
-
-Or just keep it in `.pi/extensions/` and run:
-
-```text
-/reload
-```
 
 ## Commands
 

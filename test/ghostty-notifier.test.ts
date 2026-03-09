@@ -19,31 +19,38 @@ test("extractFinalTurnToolResults only returns tool results for the final assist
 	]);
 });
 
-test("summarizeTurn ignores earlier tool failures once the final turn succeeds", () => {
+test("summarizeTurn ignores recoverable tool failures earlier in the same turn", () => {
 	const messages = [
-		{ role: "assistant", content: [{ type: "text", text: "Trying a fallback." }] },
 		{ role: "toolResult", toolName: "read", isError: true },
-		{ role: "assistant", content: [{ type: "text", text: "Applying the final changes." }] },
 		{ role: "toolResult", toolName: "write", isError: false },
-		{ role: "assistant", content: [{ type: "text", text: "Done. Updated the notifier logic." }] },
+		{ role: "assistant", content: [{ type: "text", text: "Fixed the install flow." }] },
 	];
 
 	assert.deepEqual(summarizeTurn(messages, true), {
 		category: "changes",
-		body: "Done.",
+		body: "Fixed the install flow.",
 	});
 });
 
-test("summarizeTurn still reports an error when the final turn has a failed tool result", () => {
+test("summarizeTurn reports an error when the last tool result failed", () => {
 	const messages = [
-		{ role: "assistant", content: [{ type: "text", text: "Inspecting the file." }] },
-		{ role: "toolResult", toolName: "read", isError: true },
+		{ role: "toolResult", toolName: "read", isError: false },
+		{ role: "toolResult", toolName: "edit", isError: true },
 		{ role: "assistant", content: [{ type: "text", text: "I couldn't complete that change." }] },
 	];
 
 	assert.deepEqual(summarizeTurn(messages, false), {
 		category: "error",
-		body: "read failed",
+		body: "edit failed",
+	});
+});
+
+test("summarizeTurn treats explicit assistant failure without tool results as an error", () => {
+	const messages = [{ role: "assistant", content: [{ type: "text", text: "I couldn't complete that change." }] }];
+
+	assert.deepEqual(summarizeTurn(messages, false), {
+		category: "error",
+		body: "Pi couldn't complete the request",
 	});
 });
 
