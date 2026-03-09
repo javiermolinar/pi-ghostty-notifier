@@ -1,0 +1,30 @@
+{
+  "name": "pi-ghostty-notifier",
+  "version": "0.1.0",
+  "description": "Ghostty-first notifications with smart summaries for Pi",
+  "author": "Javi Molina",
+  "license": "MIT",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-coding-agent",
+    "ghostty",
+    "notifications"
+  ],
+  "files": [
+    "extensions/",
+    "README.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-coding-agent": "*"
+  }
+}
