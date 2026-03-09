@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -93,7 +93,7 @@ function appleScriptLiteral(value: string): string {
 	return JSON.stringify(value);
 }
 
-function windowsToastScript(title: string, body: string): string {
+export function windowsToastScript(title: string, body: string): string {
 	const type = "Windows.UI.Notifications";
 	const mgr = `[${type}.ToastNotificationManager, ${type}, ContentType = WindowsRuntime]`;
 	const template = `[${type}.ToastTemplateType]::ToastText02`;
@@ -101,8 +101,8 @@ function windowsToastScript(title: string, body: string): string {
 	return [
 		`${mgr} > $null`,
 		`$xml = [${type}.ToastNotificationManager]::GetTemplateContent(${template})`,
-		`$xml.GetElementsByTagName('text')[0].AppendChild($xml.CreateTextNode('${body.replace(/'/g, "''")}')) > $null`,
-		`$xml.GetElementsByTagName('text')[1].AppendChild($xml.CreateTextNode('${title.replace(/'/g, "''")}')) > $null`,
+		`$xml.GetElementsByTagName('text')[0].AppendChild($xml.CreateTextNode('${title.replace(/'/g, "''")}')) > $null`,
+		`$xml.GetElementsByTagName('text')[1].AppendChild($xml.CreateTextNode('${body.replace(/'/g, "''")}')) > $null`,
 		`[${type}.ToastNotificationManager]::CreateToastNotifier('${title.replace(/'/g, "''")}').Show(${toast})`,
 	].join("; ");
 }
@@ -121,11 +121,6 @@ function writeTerminalSequence(data: string): void {
 
 function emitBell(): void {
 	writeTerminalSequence("\u0007");
-}
-
-function emitOSC9(body: string): void {
-	const safeBody = sanitizeOscText(body);
-	writeTerminalSequence(`\u001b]9;${safeBody}\u001b\\`);
 }
 
 function emitOSC777(title: string, body: string): void {
@@ -178,6 +173,28 @@ function extractAssistantText(message: any): string {
 		.trim();
 }
 
+export function extractFinalTurnToolResults(messages: any[]): any[] {
+	let lastAssistantIndex = -1;
+	for (let index = messages.length - 1; index >= 0; index -= 1) {
+		if (messages[index]?.role === "assistant") {
+			lastAssistantIndex = index;
+			break;
+		}
+	}
+	if (lastAssistantIndex <= 0) return [];
+
+	const toolResults: any[] = [];
+	for (let index = lastAssistantIndex - 1; index >= 0; index -= 1) {
+		const message = messages[index];
+		if (message?.role === "toolResult") {
+			toolResults.unshift(message);
+			continue;
+		}
+		break;
+	}
+	return toolResults;
+}
+
 function inferCategory(text: string, toolResults: any[]): NotificationCategory {
 	if (toolResults.some((message) => message?.role === "toolResult" && message.isError === true)) return "error";
 	if (/\?\s*$/.test(text) || /(would you like|do you want|should i|want me to|how would you like)/i.test(text)) return "question";
@@ -205,9 +222,9 @@ function fallbackSummary(category: NotificationCategory, toolResults: any[]): st
 	return "Pi is ready for input";
 }
 
-function summarizeTurn(messages: any[], includeSummary: boolean): { category: NotificationCategory; body: string } {
+export function summarizeTurn(messages: any[], includeSummary: boolean): { category: NotificationCategory; body: string } {
 	const lastAssistant = [...messages].reverse().find((message) => message?.role === "assistant");
-	const toolResults = messages.filter((message) => message?.role === "toolResult");
+	const toolResults = extractFinalTurnToolResults(messages);
 	const assistantText = extractAssistantText(lastAssistant);
 	const category = inferCategory(assistantText, toolResults);
 	if (!includeSummary) return { category, body: fallbackSummary(category, toolResults) };
@@ -220,17 +237,27 @@ function renderCategoryTitle(category: NotificationCategory): string {
 	return `${CATEGORY_EMOJI[category]} Pi · ${CATEGORY_TITLES[category]}`;
 }
 
+function extractPersistedConfig(state: PersistedState | undefined): Partial<Pick<NotifierConfig, "level">> {
+	const level = state?.config?.level;
+	if (level === "low" || level === "medium" || level === "all") return { level };
+	return {};
+}
+
+export function mergeConfig(settingsConfig: NotifierConfig, state: PersistedState | undefined): NotifierConfig {
+	return {
+		...settingsConfig,
+		...extractPersistedConfig(state),
+	};
+}
+
 export default function ghosttyNotifierExtension(pi: ExtensionAPI) {
 	let config: NotifierConfig = loadConfigFromSettings();
-	let latestCtx: ExtensionContext | undefined;
 
 	function getState(): PersistedState {
 		return {
 			version: 1,
 			config: {
 				level: config.level,
-				includeSummary: config.includeSummary,
-				bell: config.bell,
 			},
 		};
 	}
@@ -240,7 +267,6 @@ export default function ghosttyNotifierExtension(pi: ExtensionAPI) {
 	}
 
 	function reconstructState(ctx: ExtensionContext): void {
-		latestCtx = ctx;
 		const settingsConfig = loadConfigFromSettings();
 		let lastState: PersistedState | undefined;
 		for (const entry of ctx.sessionManager.getBranch()) {
@@ -248,7 +274,7 @@ export default function ghosttyNotifierExtension(pi: ExtensionAPI) {
 			const state = (entry.data as { state?: PersistedState } | undefined)?.state;
 			if (state?.version === 1) lastState = state;
 		}
-		config = { ...settingsConfig, ...(lastState?.config ?? {}) };
+		config = mergeConfig(settingsConfig, lastState);
 	}
 
 	async function sendNativeMacNotification(title: string, body: string): Promise<void> {
@@ -261,21 +287,13 @@ export default function ghosttyNotifierExtension(pi: ExtensionAPI) {
 	}
 
 	async function notify(title: string, body: string, category: NotificationCategory): Promise<void> {
-		const inGhostty = isGhostty();
 		const wantsBell = shouldBell(config.bell, category);
-		const sendTerminalFallback = () => {
-			if (process.env.KITTY_WINDOW_ID) emitOSC99(title, body);
-			else emitOSC777(title, body);
-		};
 
 		try {
-			if (inGhostty) {
-				if (wantsBell) emitBell();
-				emitOSC9(`${title}: ${body}`);
-			} else {
-				if (wantsBell) emitBell();
-				sendTerminalFallback();
-			}
+			if (wantsBell) emitBell();
+			if (isGhostty()) emitOSC777(title, body);
+			else if (process.env.KITTY_WINDOW_ID) emitOSC99(title, body);
+			else emitOSC777(title, body);
 
 			if (process.platform === "darwin") await sendNativeMacNotification(title, body);
 			else if (process.env.WT_SESSION) await sendWindowsNotification(title, body);
@@ -284,8 +302,7 @@ export default function ghosttyNotifierExtension(pi: ExtensionAPI) {
 		}
 	}
 
-	function notifyCommandResult(ctx: ExtensionContext, message: string, level: "info" | "warning" | "error" = "info"): void {
-		latestCtx = ctx;
+	function notifyCommandResult(ctx: ExtensionCommandContext, message: string, level: "info" | "warning" | "error" = "info"): void {
 		ctx.ui.notify(message, level);
 	}
 
@@ -295,7 +312,7 @@ export default function ghosttyNotifierExtension(pi: ExtensionAPI) {
 	pi.on("session_tree", async (_event, ctx) => reconstructState(ctx));
 
 	pi.on("agent_end", async (event, ctx) => {
-		latestCtx = ctx;
+		if (!ctx.hasUI) return;
 		const messages = Array.isArray((event as any).messages) ? ((event as any).messages as any[]) : [];
 		const { category, body } = summarizeTurn(messages, config.includeSummary);
 		if (!levelAllows(config.level, category)) return;
@@ -306,7 +323,6 @@ export default function ghosttyNotifierExtension(pi: ExtensionAPI) {
 		description: "Show or set notification level: low, medium, all",
 		handler: async (args, ctx) => {
 			const value = args.trim();
-			latestCtx = ctx;
 			if (!value) {
 				notifyCommandResult(ctx, `Notification level: ${config.level}`);
 				return;
@@ -320,6 +336,4 @@ export default function ghosttyNotifierExtension(pi: ExtensionAPI) {
 			notifyCommandResult(ctx, `Notification level set to ${value}`);
 		},
 	});
-
-
 }
