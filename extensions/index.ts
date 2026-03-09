@@ -235,15 +235,19 @@ function fallbackSummary(category: NotificationCategory, toolResults: any[], ass
 	return "Pi is ready for input";
 }
 
-export function summarizeTurn(messages: any[], includeSummary: boolean): { category: NotificationCategory; body: string } {
-	const lastAssistant = [...messages].reverse().find((message) => message?.role === "assistant");
-	const toolResults = extractFinalTurnToolResults(messages);
-	const assistantText = extractAssistantText(lastAssistant);
+export function summarizeAssistantTurn(message: any, toolResults: any[], includeSummary: boolean): { category: NotificationCategory; body: string } {
+	const assistantText = extractAssistantText(message);
 	const category = inferCategory(assistantText, toolResults);
 	if (!includeSummary) return { category, body: fallbackSummary(category, toolResults, assistantText) };
 	const summarySource = firstSentence(pickFirstMeaningfulLine(assistantText) || assistantText);
 	const body = truncate(summarySource || fallbackSummary(category, toolResults, assistantText), 160);
 	return { category, body };
+}
+
+export function summarizeTurn(messages: any[], includeSummary: boolean): { category: NotificationCategory; body: string } {
+	const lastAssistant = [...messages].reverse().find((message) => message?.role === "assistant");
+	const toolResults = extractFinalTurnToolResults(messages);
+	return summarizeAssistantTurn(lastAssistant, toolResults, includeSummary);
 }
 
 function renderCategoryTitle(category: NotificationCategory): string {
@@ -324,10 +328,12 @@ export default function ghosttyNotifierExtension(pi: ExtensionAPI) {
 	pi.on("session_fork", async (_event, ctx) => reconstructState(ctx));
 	pi.on("session_tree", async (_event, ctx) => reconstructState(ctx));
 
-	pi.on("agent_end", async (event, ctx) => {
+	pi.on("turn_end", async (event, ctx) => {
 		if (!ctx.hasUI) return;
-		const messages = Array.isArray((event as any).messages) ? ((event as any).messages as any[]) : [];
-		const { category, body } = summarizeTurn(messages, config.includeSummary);
+		const message = (event as any).message;
+		if (!message || message.role !== "assistant") return;
+		const toolResults = Array.isArray((event as any).toolResults) ? ((event as any).toolResults as any[]) : [];
+		const { category, body } = summarizeAssistantTurn(message, toolResults, config.includeSummary);
 		if (!levelAllows(config.level, category)) return;
 		await notify(renderCategoryTitle(category), body, category);
 	});

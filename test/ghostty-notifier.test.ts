@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import ghosttyNotifierExtension, { extractFinalTurnToolResults, mergeConfig, summarizeTurn, windowsToastScript } from "../extensions/index.ts";
+import ghosttyNotifierExtension, { extractFinalTurnToolResults, mergeConfig, summarizeAssistantTurn, summarizeTurn, windowsToastScript } from "../extensions/index.ts";
 
 test("extractFinalTurnToolResults only returns tool results for the final assistant message", () => {
 	const messages = [
@@ -87,7 +87,17 @@ test("windowsToastScript places the title in the first text slot and the body in
 	assert.ok(titleIndex < bodyIndex);
 });
 
-test("agent_end skips notifications in non-interactive contexts", async () => {
+test("summarizeAssistantTurn uses the current turn toolResults directly", () => {
+	const assistantMessage = { role: "assistant", content: [{ type: "text", text: "Done. Bumped the version and pushed it." }] };
+	const toolResults = [{ role: "toolResult", toolName: "bash", isError: false }];
+
+	assert.deepEqual(summarizeAssistantTurn(assistantMessage, toolResults, true), {
+		category: "success",
+		body: "Done.",
+	});
+});
+
+test("turn_end skips notifications in non-interactive contexts", async () => {
 	const handlers = new Map<string, Function>();
 	let execCalls = 0;
 
@@ -103,12 +113,13 @@ test("agent_end skips notifications in non-interactive contexts", async () => {
 		},
 	} as any);
 
-	const agentEnd = handlers.get("agent_end");
-	assert.ok(agentEnd);
+	const turnEnd = handlers.get("turn_end");
+	assert.ok(turnEnd);
 
-	await agentEnd(
+	await turnEnd(
 		{
-			messages: [{ role: "assistant", content: [{ type: "text", text: "Done." }] }],
+			message: { role: "assistant", content: [{ type: "text", text: "Done." }] },
+			toolResults: [],
 		},
 		{
 			hasUI: false,
